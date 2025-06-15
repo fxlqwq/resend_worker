@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高级邮件发送器 (最终版)</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
+    <style>
+        :root { --pico-font-size: 100%; }
+        body { padding: 1.5rem; }
+        main.container { max-width: 1200px; }
+        #email-section, #history-section, dialog { display: none; }
+        .grid-preview { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; transition: grid-template-columns 0.3s ease-in-out; }
+        .grid-preview.preview-hidden { grid-template-columns: 1fr; }
+        #live-preview-container { transition: opacity 0.3s ease-in-out; }
+        .grid-preview.preview-hidden #live-preview-container { display: none; }
+
+        #response { margin-top: 1rem; padding: 1rem; border-radius: var(--pico-border-radius); display: none; }
+        #response.success { background-color: var(--pico-color-green-200); color: var(--pico-color-green-950); }
+        #response.error { background-color: var(--pico-color-red-200); color: var(--pico-color-red-950); }
+        #html-toolbar button { padding: 0.25rem 0.5rem; margin-right: 0.5rem; }
+        dialog article { padding: 1.5rem; }
+        #details-modal-content, #settings-modal-content { max-height: 70vh; overflow-y: auto; }
+        #header-controls { position: absolute; top: 1.5rem; right: 1.5rem; display: flex; gap: 1rem; }
+        
+        /* --- 样式优化 --- */
+        [data-theme='dark'] #live-preview, [data-theme='dark'] #details-modal-preview {
+            background-color: #f1f3f5;
+            color: #111827;
+        }
+        #history-list table { border-collapse: separate; border-spacing: 0; }
+        #history-list th, #history-list td { padding: 0.75rem 1rem; text-align: left; }
+        #history-list tbody tr { border-bottom: 1px solid var(--pico-table-border-color); transition: background-color 0.2s ease-in-out; }
+        #history-list tbody tr:last-child { border-bottom: none; }
+        #history-list tbody tr:hover { cursor: pointer; background-color: var(--pico-card-background-color); }
+        
+        #attachment-list { margin-top: 0.75rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+        .attachment-item { background-color: var(--pico-secondary-background); padding: 0.35rem 0.75rem; border-radius: var(--pico-border-radius); display: flex; align-items: center; gap: 0.75rem; font-size: 0.875rem; }
+        .delete-attachment-btn { background: none; border: none; color: var(--pico-secondary-foreground); cursor: pointer; font-weight: bold; padding: 0; line-height: 1; opacity: 0.7; }
+        .delete-attachment-btn:hover { opacity: 1; }
+
+        .detail-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.75rem 1.5rem; align-items: baseline; }
+        .detail-grid strong { text-align: right; color: var(--pico-hgroup-color); font-weight: normal; }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <div id="header-controls">
+            <button id="settings-btn" class="secondary outline" aria-label="设置">⚙️</button>
+            <button id="theme-toggle-btn" class="secondary outline" aria-label="切换主题">🌓</button>
+        </div>
+        <header>
+            <h1>高级邮件发送器 🚀</h1>
+            <p>由 Cloudflare Workers & Resend 驱动</p>
+        </header>
+
+        <section id="password-section">
+            <article><h3 aria-busy="true">访问受限</h3><form id="passwordForm"><label for="password">密码</label><input type="password" id="password" name="password" placeholder="请输入密码以继续" required><button type="submit">解锁</button></form></article>
+        </section>
+
+        <section id="email-section">
+            <form id="emailForm">
+                <div class="grid">
+                    <label>收件人 (To)<input type="text" id="to" name="to" placeholder="a@example.com, b@example.com" required></label>
+                    <label>发件人 (From)<input type="text" id="from" name="from" required><small>此域名必须在 Resend 中验证。</small></label>
+                </div>
+                <div class="grid">
+                    <label>抄送 (CC)<input type="text" id="cc" name="cc" placeholder="c@example.com"></label>
+                    <label>密送 (BCC)<input type="text" id="bcc" name="bcc" placeholder="e@example.com"></label>
+                </div>
+                <label for="subject">主题 (Subject)</label><input type="text" id="subject" name="subject" placeholder="邮件主题" required>
+                <label for="template">邮件模板</label>
+                <select id="template"><option value="">-- 选择模板 --</option><option value="welcome">欢迎邮件</option><option value="reset">密码重置</option></select>
+                
+                <div class="grid-preview">
+                    <div>
+                        <!-- 已修正：将切换按钮移动到此处 -->
+                        <label for="html" style="display: flex; justify-content: space-between; align-items: center;">
+                            <span>HTML 内容</span>
+                            <button type="button" id="toggle-preview-btn" class="secondary outline" style="font-size: 0.75rem; padding: 0.1rem 0.5rem; margin-bottom: 0.5rem;">隐藏预览</button>
+                        </label>
+                        <div id="html-toolbar"><button type="button" data-tag="b"><b>B</b></button><button type="button" data-tag="i"><i>I</i></button><button type="button" data-tag="a">链接</button><button type="button" data-tag="img">图片</button></div>
+                        <textarea id="html" name="html" rows="12" required></textarea>
+                    </div>
+                    <div id="live-preview-container">
+                        <label>实时预览</label>
+                        <div id="live-preview"></div>
+                    </div>
+                </div>
+                <input type="file" id="imageEmbedInput" accept="image/*" style="display: none;">
+                
+                <div class="grid">
+                    <label>回复至 (Reply To)<input type="email" id="reply_to" name="reply_to" placeholder="reply@example.com"></label>
+                    <label>定时发送 (留空则立即发送)<input type="datetime-local" id="scheduled_at" name="scheduled_at"></label>
+                </div>
+
+                <label>附件 (可选)<input type="file" id="attachment-input" multiple></label>
+                <div id="attachment-list"></div>
+
+                <footer>
+                    <button type="submit" id="submitBtn">发送邮件</button>
+                    <button type="button" id="saveDraftBtn" class="secondary">保存草稿</button>
+                    <button type="button" id="loadDraftBtn" class="secondary outline">加载草稿</button>
+                </footer>
+            </form>
+            <div id="response"></div>
+        </section>
+
+        <section id="history-section"><hr><h2 id="history-title">发送历史</h2><div id="history-list"></div><button id="clearHistoryBtn" class="secondary outline">清空历史</button></section>
+    </main>
+    
+    <dialog id="details-modal"><article><header><button aria-label="Close" rel="prev" id="close-details-modal-btn"></button><p><strong>邮件详情</strong></p></header><div id="details-modal-content"></div></article></dialog>
+    <dialog id="settings-modal"><article><header><button aria-label="Close" rel="prev" id="close-settings-modal-btn"></button><p><strong>设置</strong></p></header><div id="settings-modal-content"><form id="settingsForm"><label>Worker URL<input type="url" id="setting-worker-url" placeholder="https://your-worker.name.workers.dev" required></label><label>默认发件人地址<input type="text" id="setting-from-email" placeholder="Your Name <from@your-verified-domain.com>" required></label><button type="submit">保存设置</button></form></div></article></dialog>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- DOM 元素 ---
+        const dom = { passwordForm: document.getElementById('passwordForm'), passwordSection: document.getElementById('password-section'), emailSection: document.getElementById('email-section'), historySection: document.getElementById('history-section'), emailForm: document.getElementById('emailForm'), responseDiv: document.getElementById('response'), submitBtn: document.getElementById('submitBtn'), historyList: document.getElementById('history-list'), clearHistoryBtn: document.getElementById('clearHistoryBtn'), historyTitle: document.getElementById('history-title'), saveDraftBtn: document.getElementById('saveDraftBtn'), loadDraftBtn: document.getElementById('loadDraftBtn'), templateSelector: document.getElementById('template'), htmlToolbar: document.getElementById('html-toolbar'), htmlTextarea: document.getElementById('html'), imageEmbedInput: document.getElementById('imageEmbedInput'), livePreview: document.getElementById('live-preview'), themeToggleBtn: document.getElementById('theme-toggle-btn'), settingsBtn: document.getElementById('settings-btn'), detailsModal: document.getElementById('details-modal'), detailsModalContent: document.getElementById('details-modal-content'), closeDetailsModalBtn: document.getElementById('close-details-modal-btn'), settingsModal: document.getElementById('settings-modal'), settingsForm: document.getElementById('settingsForm'), closeSettingsModalBtn: document.getElementById('close-settings-modal-btn'), fromInput: document.getElementById('from'), workerUrlInput: document.getElementById('setting-worker-url'), fromEmailInput: document.getElementById('setting-from-email'), scheduledAtInput: document.getElementById('scheduled_at'), gridPreview: document.querySelector('.grid-preview'), togglePreviewBtn: document.getElementById('toggle-preview-btn'), attachmentInput: document.getElementById('attachment-input'), attachmentList: document.getElementById('attachment-list') };
+        
+        // --- 状态与配置 ---
+        let config = { WORKER_URL: 'https://resend.xemx.dpdns.org/', FROM_EMAIL: 'FXL <fxl@xemx.dpdns.org>', PWD_HASH: 'd8fb238cc20a874529801c28771ed39acde486da770113565862e6c549cfd841' };
+        let selectedAttachments = [];
+
+        // --- 函数 ---
+        const showMessage = (msg, isError = false) => { dom.responseDiv.style.display = 'block'; dom.responseDiv.textContent = msg; dom.responseDiv.className = isError ? 'error' : 'success'; };
+        const textToHash = async (text) => { const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)); return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join(''); };
+        const parseEmails = (str) => str.split(',').map(email => email.trim()).filter(Boolean);
+        const applyTheme = (theme) => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); };
+        const loadConfig = () => { const savedConfig = JSON.parse(localStorage.getItem('appConfig')); if (savedConfig) { Object.assign(config, savedConfig); } dom.workerUrlInput.value = config.WORKER_URL; dom.fromEmailInput.value = config.FROM_EMAIL; dom.fromInput.value = config.FROM_EMAIL; };
+        
+        // --- 附件管理 ---
+        const renderAttachments = () => {
+            dom.attachmentList.innerHTML = '';
+            selectedAttachments.forEach((file, index) => {
+                const item = document.createElement('div');
+                item.className = 'attachment-item';
+                item.innerHTML = `<span>${file.name}</span><button type="button" class="delete-attachment-btn" data-index="${index}">×</button>`;
+                dom.attachmentList.appendChild(item);
+            });
+        };
+        dom.attachmentInput.addEventListener('change', (e) => {
+            Array.from(e.target.files).forEach(file => selectedAttachments.push(file));
+            renderAttachments();
+            dom.attachmentInput.value = ''; // 重置以便选择同名文件
+        });
+        dom.attachmentList.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delete-attachment-btn')) {
+                selectedAttachments.splice(e.target.dataset.index, 1);
+                renderAttachments();
+            }
+        });
+
+        const getHistory = () => JSON.parse(localStorage.getItem('emailHistory') || '[]');
+        const saveToHistory = (payload, response) => {
+            const history = getHistory();
+            const newEntry = {
+                payload: { ...payload, attachments: payload.attachments ? payload.attachments.map(a => a.filename) : [] }, // 只存文件名
+                status: response.ok ? '成功' : '失败', id: response.ok ? response.data.id : '无', timestamp: new Date().toLocaleString()
+            };
+            history.unshift(newEntry); localStorage.setItem('emailHistory', JSON.stringify(history.slice(0, 50))); renderHistory();
+        };
+        const renderHistory = () => {
+            const history = getHistory(); dom.historyTitle.textContent = `发送历史 (${history.length})`;
+            if (history.length === 0) { dom.historyList.innerHTML = '<p>没有最近的发送记录。</p>'; return; }
+            dom.historyList.innerHTML = `<figure><table><thead><tr><th>收件人</th><th>主题</th><th>状态</th><th>日期</th></tr></thead><tbody>${history.map((item, index) => `<tr data-history-index="${index}"><td>${item.payload.to.join(', ')}</td><td>${item.payload.subject}</td><td>${item.status}</td><td>${item.timestamp}</td></tr>`).join('')}</tbody></table></figure>`;
+        };
+
+        // --- 初始化 ---
+        loadConfig();
+        applyTheme(localStorage.getItem('theme') || 'dark');
+
+        // --- 事件监听器 ---
+        dom.themeToggleBtn.addEventListener('click', () => applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'));
+        dom.settingsBtn.addEventListener('click', () => dom.settingsModal.style.display = 'block');
+        dom.closeSettingsModalBtn.addEventListener('click', () => dom.settingsModal.style.display = 'none');
+        dom.settingsForm.addEventListener('submit', (e) => { e.preventDefault(); const newConfig = { WORKER_URL: dom.workerUrlInput.value, FROM_EMAIL: dom.fromEmailInput.value }; localStorage.setItem('appConfig', JSON.stringify(newConfig)); loadConfig(); showMessage('设置已保存！'); dom.settingsModal.style.display = 'none'; });
+        dom.passwordForm.addEventListener('submit', async e => { e.preventDefault(); if (await textToHash(document.getElementById('password').value) === config.PWD_HASH) { dom.passwordSection.style.display = 'none'; dom.emailSection.style.display = 'block'; dom.historySection.style.display = 'block'; renderHistory(); } else { alert('密码错误。'); } });
+        dom.htmlTextarea.addEventListener('input', () => dom.livePreview.innerHTML = dom.htmlTextarea.value);
+        dom.togglePreviewBtn.addEventListener('click', () => { dom.gridPreview.classList.toggle('preview-hidden'); dom.togglePreviewBtn.textContent = dom.gridPreview.classList.contains('preview-hidden') ? '显示预览' : '隐藏预览'; });
+
+        dom.emailForm.addEventListener('submit', async e => {
+            e.preventDefault();
+            dom.submitBtn.disabled = true; dom.submitBtn.setAttribute('aria-busy', 'true'); dom.responseDiv.style.display = 'none';
+            const formData = new FormData(dom.emailForm);
+            const payload = { from: formData.get('from'), to: parseEmails(formData.get('to')), subject: formData.get('subject'), html: formData.get('html'), cc: parseEmails(formData.get('cc')), bcc: parseEmails(formData.get('bcc')), reply_to: formData.get('reply_to') || undefined, scheduled_at: dom.scheduledAtInput.value ? new Date(dom.scheduledAtInput.value).toISOString() : undefined };
+            Object.keys(payload).forEach(k => { if (!payload[k] || (Array.isArray(payload[k]) && !payload[k].length)) delete payload[k]; });
+
+            const send = async (finalPayload) => {
+                try {
+                    const response = await fetch(config.WORKER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(finalPayload) });
+                    const result = await response.json();
+                    showMessage(response.ok ? `${finalPayload.scheduled_at ? '定时邮件设置成功' : '邮件发送成功'}！ID: ${result.id}` : `错误: ${result.message || '未知错误'}`, !response.ok);
+                    if (response.ok) { dom.emailForm.reset(); dom.fromInput.value = config.FROM_EMAIL; dom.livePreview.innerHTML = ''; selectedAttachments = []; renderAttachments(); }
+                    saveToHistory(finalPayload, { ok: response.ok, data: result });
+                } catch (error) { showMessage(`发送请求失败: ${error.message}`, true); saveToHistory(finalPayload, { ok: false }); } 
+                finally { dom.submitBtn.disabled = false; dom.submitBtn.setAttribute('aria-busy', 'false'); }
+            };
+
+            if (selectedAttachments.length > 0) {
+                const attachmentPromises = selectedAttachments.map(file => new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve({ filename: file.name, content: reader.result.split(',')[1] });
+                    reader.onerror = (err) => reject(err);
+                    reader.readAsDataURL(file);
+                }));
+                try {
+                    payload.attachments = await Promise.all(attachmentPromises);
+                    send(payload);
+                } catch (error) {
+                    showMessage('读取附件文件时出错。', true); dom.submitBtn.disabled = false; dom.submitBtn.setAttribute('aria-busy', 'false');
+                }
+            } else { send(payload); }
+        });
+
+        dom.saveDraftBtn.addEventListener('click', () => { const draft = {}; new FormData(dom.emailForm).forEach((v, k) => draft[k] = v); localStorage.setItem('emailDraft', JSON.stringify(draft)); showMessage('草稿已保存！'); });
+        dom.loadDraftBtn.addEventListener('click', () => { const draft = JSON.parse(localStorage.getItem('emailDraft') || '{}'); if (Object.keys(draft).length === 0) { showMessage('没有找到已保存的草稿。', true); return; } for (const key in draft) { const el = dom.emailForm.elements[key]; if (el) el.value = draft[key]; } dom.livePreview.innerHTML = draft.html || ''; showMessage('草稿已加载。'); });
+        dom.clearHistoryBtn.addEventListener('click', () => { if(confirm('确定要清除所有历史记录吗？')) { localStorage.removeItem('emailHistory'); renderHistory(); } });
+        dom.templateSelector.addEventListener('change', e => { const t = { welcome: { subject: '欢迎加入！', html: '<h1>您好！</h1><p>感谢您的注册。</p>' }, reset: { subject: '密码重置', html: '<p>请点击 <a href="#">这里</a> 重置密码。</p>' } }[e.target.value]; if (t) { dom.emailForm.elements.subject.value = t.subject; dom.htmlTextarea.value = t.html; dom.livePreview.innerHTML = t.html; } });
+        dom.htmlToolbar.addEventListener('click', e => { if (e.target.tagName !== 'BUTTON') return; const tag = e.target.dataset.tag; if (tag === 'img') { dom.imageEmbedInput.click(); return; } let url; if (tag === 'a') { url = prompt('请输入链接地址:', 'https://'); if (!url) return; } const start = `<${tag}${url ? ` href="${url}"` : ''}>`, end = `</${tag}>`; dom.htmlTextarea.value += start + end; dom.livePreview.innerHTML = dom.htmlTextarea.value; dom.htmlTextarea.focus(); });
+        dom.imageEmbedInput.addEventListener('change', e => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { const imgTag = `<img src="${event.target.result}" alt="${file.name}" style="max-width: 100%; height: auto;">`; dom.htmlTextarea.value += imgTag; dom.livePreview.innerHTML = dom.htmlTextarea.value; }; reader.onerror = () => showMessage('读取图片文件失败！', true); e.target.value = null; });
+        
+        dom.historyList.addEventListener('click', e => {
+            const row = e.target.closest('tr');
+            if (!row || !row.dataset.historyIndex) return;
+            const history = getHistory()[row.dataset.historyIndex];
+            const p = history.payload;
+            let detailsHtml = `
+                <div class="detail-grid">
+                    <strong>主题:</strong>        <span>${p.subject}</span>
+                    <strong>发件人:</strong>      <span>${p.from}</span>
+                    <strong>收件人:</strong>      <span>${p.to.join(', ')}</span>
+                    ${p.cc && p.cc.length ? `<strong>抄送:</strong><span>${p.cc.join(', ')}</span>` : ''}
+                    ${p.bcc && p.bcc.length ? `<strong>密送:</strong><span>${p.bcc.join(', ')}</span>` : ''}
+                    ${p.reply_to ? `<strong>回复至:</strong><span>${p.reply_to}</span>` : ''}
+                    ${p.attachments && p.attachments.length ? `<strong>附件:</strong><span>${p.attachments.join('<br>')}</span>` : ''}
+                    ${p.scheduled_at ? `<strong>定时发送:</strong><span>${new Date(p.scheduled_at).toLocaleString()}</span>`: ''}
+                </div>
+                <hr>
+                <p><strong>内容预览:</strong></p>
+                <div id="details-modal-preview">${p.html}</div>`;
+            dom.detailsModalContent.innerHTML = detailsHtml;
+            dom.detailsModal.style.display = 'block';
+        });
+        dom.closeDetailsModalBtn.addEventListener('click', () => dom.detailsModal.style.display = 'none');
+    });
+    </script>
+</body>
+</html>
